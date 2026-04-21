@@ -1,0 +1,22 @@
+asr:
+  model_name: speech_paraformer-large_asr_nat-zh-cn-16k-common-vocab8404
+  chunk_ms: 200
+  sample_rate: 16000
+  vad_threshold: 0.01
+
+llm:
+  model_path: /models/qwen-7b-chat-awq
+  quant_type: awq
+  max_new_tokens: 256
+  temperature: 0.7
+
+tts:
+  voice: xiaofeng
+  emotion: friendly
+  sample_rate: 22050
+  cache_dir: .cache/tts
+
+realtime:
+  barge_in_enabled: true
+  min_silence_ms: 300
+  queue_max_size: 16

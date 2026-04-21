@@ -1,0 +1,13 @@
+fastapi==0.136.0
+pyyaml==6.0.3
+uvicorn==0.44.0
+funasr
+transformers
+autoawq
+cosyvoice
+numpy
+opencv-python
+onnxruntime
+insightface
+ultralytics
+mmpose

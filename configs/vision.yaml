@@ -1,0 +1,24 @@
+vision:
+  insightface:
+    model_pack: buffalo_l
+    providers:
+      - CUDAExecutionProvider
+      - CPUExecutionProvider
+  fqa:
+    model_path: models/fqa.onnx
+  yolo:
+    model_path: models/yolov8n.pt
+  mmpose:
+    config_path: configs/mmpose/rtmpose-s.py
+    checkpoint_path: models/rtmpose-s.pth
+  thresholds:
+    face_confidence: 0.55
+    person_confidence: 0.45
+    keypoint_confidence: 0.35
+    fqa_confidence: 0.30
+  calibration:
+    camera_height_cm: 95.0
+    camera_tilt_deg: -8.0
+    focal_length_px: 930.0
+    principal_point: [640.0, 360.0]
+    distortion_coeffs: [0.0, 0.0, 0.0, 0.0, 0.0]
