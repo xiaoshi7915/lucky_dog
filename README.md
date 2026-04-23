@@ -34,9 +34,18 @@
 
 ## 快速启动（虚拟环境）
 1. 创建虚拟环境：`python3 -m venv .venv`
-2. 安装开发依赖：`.venv/bin/pip install -r requirements-dev.txt`
-3. 运行测试：`.venv/bin/python -m pytest -q`
+2. 安装开发依赖（含完整 ML 栈）：`.venv/bin/pip install -r requirements-dev.txt`
+   - 仅运行测试（无需 GPU）可使用轻量依赖：`.venv/bin/pip install -r requirements-ci.txt`
+3. 运行测试（含覆盖率）：`.venv/bin/python -m pytest -q --cov=src`
 4. 启动服务：`.venv/bin/uvicorn src.api.app:app --host 0.0.0.0 --port 8000`
+
+## API 端点
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| GET | `/health` | 健康检查 |
+| POST | `/v1/session/start` | 创建新会话（返回 session_id） |
+| POST | `/v1/session/{session_id}/turn` | 提交单轮多模态输入 |
+| DELETE | `/v1/session/{session_id}` | 结束并清理会话 |
 
 ## 测试与稳定性
 - 单元测试：覆盖 `PromptBuilder`、`SafetyGuard`、`ActionPolicy`、`RealtimeLoop` 等关键逻辑。
@@ -87,11 +96,19 @@
   - 风险声明与免责声明完整可见。
 
 ## 里程碑
-- M1：文档与代码骨架完成（当前阶段）。
-- M2：感知链路打通（视频属性与 ASR）。
-- M3：对话与播报闭环。
-- M4：动作联动（mock 到真机适配）。
-- M5：稳定性优化、容错、测试覆盖与发布。
+- M1：文档与代码骨架完成 ✅。
+- M2：感知链路打通（视频属性与 ASR）✅。
+- M3：对话与播报闭环 ✅。
+- M4：动作联动（mock 到真机适配）✅。
+- M5：稳定性优化、容错、测试覆盖与发布（**当前阶段**）。
+  - [x] 消除 `run_duplex_turn` 重复 LLM 推理
+  - [x] `stream_synthesize` 句子级缓冲，降低 TTS 调用次数
+  - [x] `SessionManager` 实现多会话隔离
+  - [x] `SafetyGuard` 扩展关键词与正则规则，支持 YAML 配置化
+  - [x] `ActionPolicy` 规则外化为 `configs/action_rules.yaml`
+  - [x] 全局结构化错误码（E1000-E5000）落地
+  - [x] CI 轻量化（仅安装 `requirements-ci.txt`）+ 覆盖率报告
+  - [x] CosyVoice 引擎单例化，消除每次合成的冷启动延迟
 
 ## 风险与缓解
 - 算力不足导致时延偏高：采用模型分级、量化与异步流水线。

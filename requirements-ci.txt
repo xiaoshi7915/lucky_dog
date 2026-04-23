@@ -1,0 +1,12 @@
+# CI 专用依赖：只包含可在无 GPU 的 Ubuntu runner 上快速安装的轻量包。
+# 重型 ML 依赖（funasr, transformers, autoawq, cosyvoice, mmpose 等）均为
+# 可选 import，测试代码在缺少这些包时会自动走 mock 路径，无需在 CI 中安装。
+fastapi==0.136.0
+pyyaml==6.0.3
+uvicorn==0.44.0
+httpx==0.28.1
+pytest==9.0.3
+pytest-cov==6.1.0
+numpy==2.2.5
+opencv-python-headless==4.11.0.86
+onnxruntime==1.21.0

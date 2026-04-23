@@ -1,0 +1,47 @@
+# 动作触发规则配置（支持运行时调整，无需重启服务）
+# 规则按顺序匹配，首个命中的规则生效。
+# 每条规则包含：
+#   keywords: 触发关键词列表（OR 关系，任一命中即触发）
+#   intent:   输出的动作意图（须在 DogControllerBase.supported_actions 中）
+#   reason:   日志记录的原因说明
+
+keyword_rules:
+  - keywords: ["点头"]
+    intent: "nod_head"
+    reason: "语义中出现点头引导"
+
+  - keywords: ["尾巴", "开心"]
+    intent: "wag_tail"
+    reason: "语义中出现友好互动信号"
+
+  - keywords: ["过来", "靠近"]
+    intent: "approach"
+    reason: "用户或模型表达了靠近语义"
+
+  - keywords: ["左"]
+    intent: "turn_left"
+    reason: "语义中出现左转导向"
+
+  - keywords: ["右"]
+    intent: "turn_right"
+    reason: "语义中出现右转导向"
+
+  - keywords: ["你好", "hello", "hi"]
+    intent: "nod_head"
+    reason: "识别到问候语义"
+
+# 情绪触发规则
+emotion_rules:
+  - emotion: "negative"
+    intent: "nod_head"
+    reason: "目标情绪偏负面，优先安抚"
+
+# 距离触发规则（distance_delta < threshold 时触发）
+distance_rules:
+  - threshold: -0.2
+    intent: "step_back"
+    reason: "目标接近过快，触发后退限幅"
+
+# 默认动作（所有规则均未命中时使用）
+default_intent: "wag_tail"
+default_reason: "默认友好反馈动作"

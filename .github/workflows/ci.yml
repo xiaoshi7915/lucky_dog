@@ -18,10 +18,28 @@ jobs:
         with:
           python-version: "3.11"
 
-      - name: Install dependencies
+      - name: Cache pip
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/pip
+          key: ${{ runner.os }}-pip-${{ hashFiles('requirements-ci.txt') }}
+          restore-keys: |
+            ${{ runner.os }}-pip-
+
+      - name: Install CI dependencies
+        # 使用轻量 CI 专用依赖文件，避免在无 GPU 的 runner 上安装 heavy ML 包
+        # （funasr, transformers, autoawq, cosyvoice, mmpose 等）。
+        # 测试在缺少这些包时会自动走 mock 路径。
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-dev.txt
+          pip install -r requirements-ci.txt
 
-      - name: Run tests
-        run: pytest -q
+      - name: Run tests with coverage
+        run: pytest -q --cov=src --cov-report=term-missing --cov-fail-under=60
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: .coverage

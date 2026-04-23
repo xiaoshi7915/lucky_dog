@@ -12,12 +12,19 @@ from src.reasoning.safety_guard import SafetyGuard
 class _QwenAWQBackend:
     """Qwen AWQ 后端封装，缺依赖时自动回退。"""
 
-    def __init__(self) -> None:
+    def __init__(self, model_path: str = "", max_new_tokens: int = 256, temperature: float = 0.7) -> None:
         self._pipeline: Any | None = None
+        self._max_new_tokens = max_new_tokens
+        self._temperature = temperature
         try:
             from transformers import pipeline  # type: ignore
 
-            self._pipeline = pipeline("text-generation")
+            # model_path 非空时加载指定本地模型（如 Qwen-7B-Chat AWQ），
+            # 否则跳过初始化，等待 _build_reply 降级路径接管。
+            if model_path:
+                self._pipeline = pipeline("text-generation", model=model_path)
+            else:
+                self._pipeline = None
         except Exception:
             self._pipeline = None
 
@@ -26,7 +33,12 @@ class _QwenAWQBackend:
         if self._pipeline is None:
             return ""
         try:
-            output = self._pipeline(prompt, max_new_tokens=120, do_sample=True, temperature=0.7)
+            output = self._pipeline(
+                prompt,
+                max_new_tokens=self._max_new_tokens,
+                do_sample=True,
+                temperature=self._temperature,
+            )
             if isinstance(output, list) and output:
                 return str(output[0].get("generated_text", ""))
         except Exception:
@@ -47,10 +59,15 @@ class DialogueOutput:
 class DialogueEngine:
     """多模态对话引擎实现。"""
 
-    def __init__(self) -> None:
+    def __init__(self, model_path: str = "", max_new_tokens: int = 256, temperature: float = 0.7) -> None:
         self._guard = SafetyGuard()
         self._policy = ActionPolicy()
-        self._backend = _QwenAWQBackend()
+        # 将 AppConfig.llm 的参数透传给后端，确保配置生效。
+        self._backend = _QwenAWQBackend(
+            model_path=model_path,
+            max_new_tokens=max_new_tokens,
+            temperature=temperature,
+        )
 
     def respond(
         self,
@@ -80,6 +97,30 @@ class DialogueEngine:
             safety_intervened=safety.intervened,
         )
 
+    def respond_and_stream(
+        self,
+        prompt: str,
+        asr_text: str,
+        vision_summary: str,
+        active_person_id: str = "",
+    ) -> tuple["DialogueOutput", Iterable[str]]:
+        """一次推理同时返回完整 DialogueOutput 和 token 迭代器。
+
+        调用方可从 DialogueOutput 获取动作意图，无需二次调用 respond()，
+        避免重复模型推理带来的算力浪费。
+        """
+        output = self.respond(
+            prompt=prompt,
+            asr_text=asr_text,
+            vision_summary=vision_summary,
+            active_person_id=active_person_id,
+        )
+
+        def _char_iter() -> Iterable[str]:
+            yield from output.reply_text
+
+        return output, _char_iter()
+
     def stream_respond(
         self,
         prompt: str,
@@ -87,15 +128,14 @@ class DialogueEngine:
         vision_summary: str,
         active_person_id: str = "",
     ) -> Iterable[str]:
-        """以流式 token 形式输出回复文本。"""
-        output = self.respond(
+        """以流式 token 形式输出回复文本（仅返回 token 流，动作意图请用 respond_and_stream）。"""
+        _, token_iter = self.respond_and_stream(
             prompt=prompt,
             asr_text=asr_text,
             vision_summary=vision_summary,
             active_person_id=active_person_id,
         )
-        for char in output.reply_text:
-            yield char
+        yield from token_iter
 
     @staticmethod
     def _build_reply(asr_text: str, vision_summary: str) -> str:

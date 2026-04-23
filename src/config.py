@@ -149,6 +149,24 @@ def _read_yaml(path: Path) -> dict[str, Any]:
     return yaml.safe_load(raw_text) or {}
 
 
+_config_singleton: "AppConfig | None" = None
+_config_singleton_path: str = ""
+
+
+def get_config(config_path: str | Path = "configs/app.yaml") -> "AppConfig":
+    """获取全局单例配置，避免多处重复加载 YAML 文件。
+
+    首次调用时读取并缓存，后续调用直接返回缓存对象。
+    如需强制重新加载，请直接调用 load_config()。
+    """
+    global _config_singleton, _config_singleton_path  # noqa: PLW0603
+    path_str = str(config_path)
+    if _config_singleton is None or _config_singleton_path != path_str:
+        _config_singleton = load_config(config_path)
+        _config_singleton_path = path_str
+    return _config_singleton
+
+
 def load_config(config_path: str | Path, models_path: str | Path | None = None) -> AppConfig:
     """从 YAML 文件加载配置。"""
     path = Path(config_path)
