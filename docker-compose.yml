@@ -8,6 +8,27 @@ services:
     ports:
       - "8000:8000"
     volumes:
+      # 配置文件只读挂载
       - ./configs:/app/configs:ro
+      # 模型文件挂载（需在宿主机提前下载到 ./models 目录）
+      - ./models:/app/models:ro
     environment:
       - PYTHONUNBUFFERED=1
+      # 可通过环境变量覆盖运行模式：dev_fallback | strict_real
+      - APP_RUNTIME_MODE=${APP_RUNTIME_MODE:-dev_fallback}
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://localhost:8000/health')"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 15s
+
+# 如果需要 GPU 支持，取消下方注释（需安装 nvidia-container-toolkit）：
+#   deploy:
+#     resources:
+#       reservations:
+#         devices:
+#           - driver: nvidia
+#             count: 1
+#             capabilities: [gpu]

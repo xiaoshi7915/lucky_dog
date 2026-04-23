@@ -63,10 +63,11 @@ def run_duplex_acceptance(
         )
         # 累计回合数。
         turn_count += 1
-        # 采集状态与指标。
+        # 直接从 run_duplex_turn 返回值中取视觉数据，避免重复触发感知链路。
+        # 原代码此处额外调用 stream_input_events 会造成双倍感知开销。
         state = str(result.get("state", ""))
         metrics = result.get("metrics", {})
-        vision_payload = loop.stream_input_events(frame_stream=frame_stream, audio_chunks=[]).get("vision", {})
+        vision_payload = result.get("vision", {})
         # 统计中断次数。
         if state == "INTERRUPTED":
             interruptions += 1

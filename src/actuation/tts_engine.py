@@ -18,6 +18,18 @@ class TTSEngine:
         self._is_playing = False
         self._first_audio_packet_latency_ms = 0.0
         self._last_synthesis_latency_ms = 0.0
+        # 在初始化时一次性加载 CosyVoice 模型并缓存，避免每次合成时重新实例化。
+        self._cosyvoice_engine: object | None = self._build_cosyvoice_engine() if provider == "cosyvoice" else None
+
+    @staticmethod
+    def _build_cosyvoice_engine() -> object | None:
+        """初始化 CosyVoice 引擎单例，加载失败时返回 None。"""
+        try:
+            from cosyvoice import CosyVoice  # type: ignore
+
+            return CosyVoice()
+        except Exception:
+            return None
 
     def synthesize(self, text: str) -> bytes:
         """将文本转换为音频字节。"""
@@ -29,35 +41,59 @@ class TTSEngine:
         self._last_synthesis_latency_ms = round((perf_counter() - synth_start) * 1000, 2)
         return audio
 
-    @staticmethod
-    def _cosyvoice_synthesize(text: str) -> bytes:
-        """CosyVoice 合成适配。"""
+    def _cosyvoice_synthesize(self, text: str) -> bytes:
+        """CosyVoice 合成适配，使用缓存的引擎单例。"""
+        engine = self._cosyvoice_engine
         try:
-            from cosyvoice import CosyVoice  # type: ignore
-
-            engine = CosyVoice()
-            audio = engine.inference(text=text) if hasattr(engine, "inference") else engine.infer(text=text)
-            if isinstance(audio, (bytes, bytearray)):
-                return bytes(audio)
+            if engine is not None:
+                audio = engine.inference(text=text) if hasattr(engine, "inference") else engine.infer(text=text)  # type: ignore[union-attr]
+                if isinstance(audio, (bytes, bytearray)):
+                    return bytes(audio)
         except Exception:
             pass
-        # 保底产出可写 wav 的 pcm 字节，避免伪占位字符串。
+        # 保底产出 pcm 字节，避免伪占位字符串。
         return (text[:1] or "a").encode("utf-8") * 2048
 
+    # 句子边界标点，遇到这些字符后立即合成当前缓冲区，降低首包延迟同时提升音质。
+    _SENTENCE_DELIMITERS = frozenset("。！？.!?，,；;")
+
     def stream_synthesize(self, tokens: Iterable[str]) -> Iterable[bytes]:
-        """将 token 流转换为音频流。"""
+        """将 token 流按句子边界缓冲后批量合成为音频流。
+
+        原逐字符合成会触发海量 TTS 调用；改为按标点分句，每句合成一次，
+        兼顾首包延迟（遇标点即合成）与音质（整句上下文更自然）。
+        """
         start = perf_counter()
         first_packet_emitted = False
         self._audio_queue.reset_interrupt()
-        for token in tokens:
+        buffer: list[str] = []
+
+        def _flush_buffer() -> Iterable[bytes]:
+            """合成缓冲区中的文本并重置缓冲。"""
+            nonlocal first_packet_emitted
+            text = "".join(buffer)
+            buffer.clear()
+            if not text.strip():
+                return
             if self._audio_queue.interrupted:
-                break
-            audio = self.synthesize(token)
+                return
+            audio = self.synthesize(text)
             self.enqueue_for_playback(audio)
             if not first_packet_emitted:
                 self._first_audio_packet_latency_ms = round((perf_counter() - start) * 1000, 2)
                 first_packet_emitted = True
             yield audio
+
+        for token in tokens:
+            if self._audio_queue.interrupted:
+                break
+            buffer.append(token)
+            # 遇到句子边界标点时立即合成，避免等到全部 token 才开始合成。
+            if any(ch in self._SENTENCE_DELIMITERS for ch in token):
+                yield from _flush_buffer()
+
+        # 合成尾部剩余文本（最后一句可能没有结尾标点）。
+        yield from _flush_buffer()
 
     def enqueue_for_playback(self, audio_chunk: bytes) -> None:
         """将音频加入播放队列。"""

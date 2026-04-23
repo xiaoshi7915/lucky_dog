@@ -1,11 +1,14 @@
 """实时主循环骨架。"""
 
+import logging
 from collections.abc import Iterable
 from dataclasses import asdict
 from queue import Queue
 from time import perf_counter
 from typing import Any
 from uuid import uuid4
+
+logger = logging.getLogger(__name__)
 
 from src.actuation.dog_controller_base import DogControllerBase
 from src.actuation.dog_controller_mock import DogControllerMock
@@ -28,8 +31,10 @@ from src.reasoning.session_memory import PersonaSessionMemory
 class RealtimeLoop:
     """编排核心模块形成单轮闭环。"""
 
-    def __init__(self) -> None:
-        self.config: AppConfig = load_config("configs/app.yaml")
+    def __init__(self, config: AppConfig | None = None) -> None:
+        # 支持外部注入 config（用于 SessionManager 多会话场景），
+        # 未注入时回退到从 YAML 加载，保持向后兼容。
+        self.config: AppConfig = config if config is not None else load_config("configs/app.yaml")
         self.event_bus = EventBus()
         self.face_analyzer = FaceAnalyzer(self.config.vision)
         self.person_face_detector = PersonFaceDetector(self.config.vision)
@@ -37,7 +42,12 @@ class RealtimeLoop:
         self.direction_estimator = SpeakerDirectionEstimator()
         self.asr = ASRStream()
         self.prompt_builder = PromptBuilder()
-        self.dialogue = DialogueEngine()
+        # 将 LLM 配置注入引擎，确保 model_path / max_new_tokens / temperature 生效。
+        self.dialogue = DialogueEngine(
+            model_path=self.config.llm.model_path,
+            max_new_tokens=self.config.llm.max_new_tokens,
+            temperature=self.config.llm.temperature,
+        )
         self.tts = TTSEngine(provider=self.config.tts.provider)
         self.tracker = MultiPersonTracker()
         self.target_selector = ActiveSpeakerTargetSelector()
@@ -61,7 +71,7 @@ class RealtimeLoop:
             "Vision": bool(self.config.vision.yolo_model_path and self.config.vision.mmpose_checkpoint_path),
             "Dog": isinstance(self.dog, DogControllerUnitree),
         }
-        print(f"[runtime_mode={self.config.runtime_mode}] readiness={matrix}")
+        logger.info("[runtime_mode=%s] readiness=%s", self.config.runtime_mode, matrix)
 
     def _ensure_runtime_safety(self) -> None:
         """严格模式下执行 fail-fast 就绪检查。"""
@@ -216,6 +226,15 @@ class RealtimeLoop:
         self.event_bus.publish("turn_completed", result)
         return result
 
+    def _drain_queues(self) -> None:
+        """清空三个跨轮次队列，防止旧轮次数据在新轮次中积压。"""
+        for q in (self.asr_partial_queue, self.llm_reply_queue, self.tts_play_queue):
+            while not q.empty():
+                try:
+                    q.get_nowait()
+                except Exception:
+                    break
+
     def run_duplex_turn(
         self,
         audio_chunks: list[bytes],
@@ -226,6 +245,8 @@ class RealtimeLoop:
         turn_start = perf_counter()
         turn_id = str(uuid4())
         session_id = "local_session"
+        # 每轮开始前清空队列，防止前一轮残留数据干扰当前轮次。
+        self._drain_queues()
         self.state = "LISTENING"
         input_state = self.stream_input_events(frame_stream=frame_stream, audio_chunks=audio_chunks)
         asr_text = input_state.get("asr_text", "")
@@ -246,15 +267,17 @@ class RealtimeLoop:
             )
         )
         first_token_start = perf_counter()
-        tokens = list(
-            self.dialogue.stream_respond(
-                prompt=prompt,
-                asr_text=asr_text,
-                vision_summary="",
-                active_person_id=str(input_state.get("vision", {}).get("active_person_id", "")),
-            )
+        # 一次推理同时拿到 DialogueOutput（含动作意图）和 token 迭代器，
+        # 避免原来 stream_respond + respond 两次调用造成的重复模型推理。
+        dialogue_output, token_iter = self.dialogue.respond_and_stream(
+            prompt=prompt,
+            asr_text=asr_text,
+            vision_summary="",
+            active_person_id=str(input_state.get("vision", {}).get("active_person_id", "")),
         )
-        for token in tokens:
+        tokens: list[str] = []
+        for token in token_iter:
+            tokens.append(token)
             if not self.llm_reply_queue.full():
                 self.llm_reply_queue.put(token)
                 self.event_bus.publish(
@@ -281,15 +304,15 @@ class RealtimeLoop:
         if simulate_barge_in and self.config.realtime.barge_in_enabled:
             self.tts.interrupt_playback()
             self.state = "INTERRUPTED"
-        decision = self.dialogue.respond(prompt=prompt, asr_text=asr_text, vision_summary="")
-        action_ok = self.dog.execute_action(decision.action_intent)
+        # 直接使用已有的 dialogue_output，无需第二次 respond()。
+        action_ok = self.dog.execute_action(dialogue_output.action_intent)
         self.event_bus.publish(
             "motion_cmd",
             {
                 "turn_id": turn_id,
                 "session_id": session_id,
                 "person_id": person_id,
-                "action_intent": decision.action_intent,
+                "action_intent": dialogue_output.action_intent,
                 "ok": action_ok,
             },
         )
@@ -299,6 +322,8 @@ class RealtimeLoop:
             "turn_id": turn_id,
             "session_id": session_id,
             "person_id": person_id,
+            # 视觉数据随结果一起返回，避免调用方再次触发感知链路。
+            "vision": input_state.get("vision", {}),
             "metrics": {
                 "first_token_latency_ms": first_token_latency_ms,
                 "first_audio_latency_ms": first_audio_latency_ms,
