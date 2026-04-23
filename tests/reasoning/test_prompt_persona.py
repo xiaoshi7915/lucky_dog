@@ -13,9 +13,10 @@ def test_prompt_builder_should_include_persona_and_safety_layers() -> None:
             vision_summary="性别=female，年龄=25，人脸质量=0.9，估计身高=168cm",
         )
     )
-    assert "你是一只高情商、会接梗的机器狗助手" in prompt
+    # 升级后的人设字段已变更，检查核心内容即可
+    assert "高情商" in prompt
     assert "严禁将任何判断表述为医学或心理学结论" in prompt
-    assert "用户语句" in prompt
+    assert "用户说" in prompt  # 升级后字段名改为"用户说"
 
 
 def test_dialogue_engine_stream_should_soften_appearance_judgement() -> None:

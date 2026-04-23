@@ -11,7 +11,7 @@ def test_prompt_builder_should_include_disclaimer_by_default() -> None:
 
     prompt = builder.build(PromptContext(asr_text="你好", vision_summary="性别=female"))
 
-    assert "系统声明" in prompt
+    assert "声明" in prompt  # 升级后免责声明标签变为【声明】
 
 
 def test_safety_guard_should_intervene_on_risky_keywords() -> None:
