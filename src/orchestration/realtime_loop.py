@@ -24,7 +24,11 @@ from src.perception.pose_height_estimator import PoseHeightEstimator
 from src.perception.speaker_direction_estimator import SpeakerDirectionEstimator
 from src.perception.target_selector import ActiveSpeakerTargetSelector
 from src.reasoning.dialogue_engine import DialogueEngine
+from src.reasoning.emotion_analyzer import EmotionAnalyzer, compute_audio_energy
+from src.reasoning.personality_adaptor import PersonalityAdaptor
+from src.reasoning.proactive_engagement import ProactiveEngagement
 from src.reasoning.prompt_builder import PromptBuilder, PromptContext
+from src.reasoning.scenario_matcher import ScenarioMatcher, SceneContext
 from src.reasoning.session_memory import PersonaSessionMemory
 
 
@@ -52,6 +56,11 @@ class RealtimeLoop:
         self.tracker = MultiPersonTracker()
         self.target_selector = ActiveSpeakerTargetSelector()
         self.session_memory = PersonaSessionMemory()
+        # 高情商模块：情绪分析、场景匹配、语气适配、主动开话
+        self.emotion_analyzer = EmotionAnalyzer()
+        self.scenario_matcher = ScenarioMatcher()
+        self.personality_adaptor = PersonalityAdaptor()
+        self.proactive_engagement = ProactiveEngagement()
         self.dog: DogControllerBase = (
             DogControllerUnitree() if self.config.runtime_mode == "strict_real" else DogControllerMock()
         )
@@ -168,26 +177,88 @@ class RealtimeLoop:
         vision_summary: str = "",
         frame_stream: Iterable[bytes] | None = None,
     ) -> dict[str, Any]:
-        """执行单轮多模态流程并返回观测结果。"""
+        """执行单轮多模态高情商流程并返回观测结果。"""
         turn_start = perf_counter()
         input_start = perf_counter()
         input_state = self.stream_input_events(frame_stream or [], audio_chunks)
         input_latency_ms = round((perf_counter() - input_start) * 1000, 2)
         asr_text = input_state.get("asr_text", "")
         computed_vision = input_state.get("vision", {})
-        resolved_vision_summary = vision_summary or self.prompt_builder.summarize_vision(computed_vision)
-        llm_start = perf_counter()
         active_person_id = str(computed_vision.get("active_person_id", ""))
-        memory_summary = self.session_memory.summarize(active_person_id)
-        prompt = self.prompt_builder.build(
-            PromptContext(asr_text=asr_text, vision_summary=resolved_vision_summary, memory_summary=memory_summary)
+
+        # ── 情绪分析 ──
+        audio_energy = compute_audio_energy(b"".join(audio_chunks)) if audio_chunks else None
+        emotion_result = self.emotion_analyzer.analyze(
+            asr_text=asr_text,
+            audio_energy=audio_energy,
+            vision_payload=computed_vision,
         )
-        self.event_bus.publish("prompt_built", {"prompt": prompt})
+        prev_emotion = self.session_memory.get(active_person_id)
+        prev_emotion_state = prev_emotion.recent_emotion if prev_emotion else "neutral"
+
+        # ── 主动开话检测 ──
+        mem_scene = self.session_memory.summarize_for_scene(active_person_id)
+        self.proactive_engagement.record_user_speech(asr_text)
+        proactive_signal = self.proactive_engagement.check(
+            asr_text=asr_text,
+            emotion_state=emotion_result.state,
+            prev_emotion_state=prev_emotion_state,
+            recent_topics=mem_scene.get("recent_topics", []),
+            preferred_name=mem_scene.get("preferred_name", ""),
+            vision_payload=computed_vision,
+        )
+
+        # ── 场景匹配 ──
+        age = int(computed_vision.get("age", 0))
+        scene_ctx = SceneContext(
+            asr_text=asr_text,
+            emotion_state=emotion_result.state,
+            emotion_confidence=emotion_result.confidence,
+            person_id=active_person_id,
+            preferred_name=mem_scene.get("preferred_name", ""),
+            recent_topics=mem_scene.get("recent_topics", []),
+            is_first_meet=mem_scene.get("is_first_meet", True),
+            tracked_person_count=int(computed_vision.get("tracked_person_count", 1)),
+            turn_count=mem_scene.get("turn_count", 0),
+            vision_payload=computed_vision,
+        )
+        scene_match = self.scenario_matcher.match(scene_ctx)
+
+        # ── 语气适配 ──
+        tone_instruction = self.personality_adaptor.get_reply_style_instruction(
+            emotion_state=emotion_result.state,
+            age=age,
+            turn_count=mem_scene.get("turn_count", 0),
+            scene_tone=scene_match.tone,
+        )
+
+        # ── 构建高情商 Prompt ──
+        resolved_vision_summary = vision_summary or self.prompt_builder.summarize_vision(computed_vision)
+        memory_summary = self.session_memory.summarize(active_person_id)
+        llm_start = perf_counter()
+        prompt = self.prompt_builder.build(
+            PromptContext(
+                asr_text=asr_text,
+                vision_summary=resolved_vision_summary,
+                memory_summary=memory_summary,
+                emotion_state=emotion_result.state,
+                emotion_confidence=emotion_result.confidence,
+                scene_id=scene_match.scene_id,
+                scene_template=scene_match.template,
+                scene_reply_hint=scene_match.reply_hint,
+                preferred_name=mem_scene.get("preferred_name", ""),
+                tone_instruction=tone_instruction,
+                proactive_hint=proactive_signal.suggested_utterance if proactive_signal.should_engage else "",
+                recent_topics=mem_scene.get("recent_topics", []),
+            )
+        )
+        self.event_bus.publish("prompt_built", {"prompt": prompt, "scene_id": scene_match.scene_id})
         dialogue_output = self.dialogue.respond(
             prompt,
             asr_text=asr_text,
             vision_summary=resolved_vision_summary,
             active_person_id=active_person_id,
+            emotion_trend=self.session_memory.get_emotion_trend(active_person_id),
         )
         self.event_bus.publish("dialogue_generated", asdict(dialogue_output))
         llm_latency_ms = round((perf_counter() - llm_start) * 1000, 2)
@@ -196,11 +267,13 @@ class RealtimeLoop:
         self.event_bus.publish("tts_generated", {"audio_size": len(audio_bytes)})
         tts_latency_ms = round((perf_counter() - tts_start) * 1000, 2)
         action_ok = self.dog.execute_action(dialogue_output.action_intent)
+        # 更新记忆（含情绪历史）
         self.session_memory.update(
             person_id=active_person_id,
             topic=asr_text[:32],
-            emotion="neutral",
+            emotion=emotion_result.state,
             utterance=asr_text,
+            emotion_confidence=emotion_result.confidence,
         )
         total_latency_ms = round((perf_counter() - turn_start) * 1000, 2)
         result = {
@@ -212,6 +285,17 @@ class RealtimeLoop:
             "tts_audio_size": len(audio_bytes),
             "action_ok": action_ok,
             "action_history_size": len(self.dog.execution_history),
+            # 情商增强字段
+            "eq": {
+                "emotion_state": emotion_result.state,
+                "emotion_confidence": emotion_result.confidence,
+                "emotion_evidence": emotion_result.evidence,
+                "scene_id": scene_match.scene_id,
+                "scene_name": scene_match.scene_name,
+                "tone": scene_match.tone,
+                "proactive": proactive_signal.should_engage,
+                "proactive_type": proactive_signal.trigger_type,
+            },
             "metrics": {
                 "degraded": bool(not computed_vision or not asr_text),
                 "latency_ms": {

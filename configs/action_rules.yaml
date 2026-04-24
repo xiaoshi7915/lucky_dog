@@ -1,47 +1,125 @@
-# 动作触发规则配置（支持运行时调整，无需重启服务）
-# 规则按顺序匹配，首个命中的规则生效。
-# 每条规则包含：
-#   keywords: 触发关键词列表（OR 关系，任一命中即触发）
-#   intent:   输出的动作意图（须在 DogControllerBase.supported_actions 中）
-#   reason:   日志记录的原因说明
+# 动作触发规则配置（升级版：增加情绪-动作联动与场景动作映射）
+# ActionPolicy 从此文件加载规则，支持运行时调整无需重启
 
+# ================================================================
+# 关键词触发规则（顺序匹配，首个命中生效）
+# ================================================================
 keyword_rules:
-  - keywords: ["点头"]
+  - keywords: ["点头", "对对对", "是的是的", "嗯嗯"]
     intent: "nod_head"
-    reason: "语义中出现点头引导"
+    reason: "语义中出现点头/认可引导"
 
-  - keywords: ["尾巴", "开心"]
+  - keywords: ["尾巴", "开心", "好开心", "哈哈", "太棒了", "高兴"]
     intent: "wag_tail"
     reason: "语义中出现友好互动信号"
 
-  - keywords: ["过来", "靠近"]
+  - keywords: ["过来", "靠近", "来这里", "过来陪我"]
     intent: "approach"
-    reason: "用户或模型表达了靠近语义"
+    reason: "用户表达了靠近语义"
 
-  - keywords: ["左"]
+  - keywords: ["左", "左边", "往左"]
     intent: "turn_left"
     reason: "语义中出现左转导向"
 
-  - keywords: ["右"]
+  - keywords: ["右", "右边", "往右"]
     intent: "turn_right"
     reason: "语义中出现右转导向"
 
-  - keywords: ["你好", "hello", "hi"]
+  - keywords: ["你好", "hello", "hi", "嗨", "哈喽", "在吗"]
     intent: "nod_head"
     reason: "识别到问候语义"
 
-# 情绪触发规则
+  - keywords: ["再见", "拜拜", "走了", "bye", "晚安"]
+    intent: "wag_tail"
+    reason: "道别时摇尾巴送行"
+
+  - keywords: ["摇摇", "摇尾巴", "表演"]
+    intent: "wag_tail"
+    reason: "用户主动要求表演动作"
+
+# ================================================================
+# 情绪触发规则（按情绪状态映射动作）
+# 优先级低于关键词规则，高于距离规则
+# ================================================================
 emotion_rules:
+  - emotion: "sad"
+    intent: "approach"
+    reason: "用户难过时主动靠近陪伴"
+
+  - emotion: "frustrated"
+    intent: "approach"
+    reason: "用户烦躁时靠近给予安抚感"
+
+  - emotion: "anxious"
+    intent: "nod_head"
+    reason: "用户焦虑时点头表示理解与支持"
+
+  - emotion: "happy"
+    intent: "wag_tail"
+    reason: "用户开心时高频摇尾巴同频共振"
+
+  - emotion: "excited"
+    intent: "wag_tail"
+    reason: "用户兴奋时摇尾巴配合节奏"
+
+  - emotion: "angry"
+    intent: "step_back"
+    reason: "用户愤怒时后退给对方空间，避免压迫感"
+
   - emotion: "negative"
     intent: "nod_head"
-    reason: "目标情绪偏负面，优先安抚"
+    reason: "负面情绪时点头表示安抚"
 
+# ================================================================
+# 场景动作映射（ScenarioMatcher 的 action_hint 参考）
+# ================================================================
+scene_action_rules:
+  - scene_id: "s1_first_meet"
+    intent: "wag_tail"
+    reason: "初次见面摇尾巴热情欢迎"
+
+  - scene_id: "s2_reunion"
+    intent: "approach"
+    reason: "熟人再见主动靠近"
+
+  - scene_id: "s3_comfort"
+    intent: "approach"
+    reason: "情绪陪伴时靠近给予支持感"
+
+  - scene_id: "s4_happy"
+    intent: "wag_tail"
+    reason: "开心互动高频摇尾巴"
+
+  - scene_id: "s4_excited"
+    intent: "wag_tail"
+    reason: "兴奋场景配合快节奏摇尾"
+
+  - scene_id: "s5_silence_1"
+    intent: "nod_head"
+    reason: "轻声唤醒时点头示意"
+
+  - scene_id: "s6_sensitive"
+    intent: "nod_head"
+    reason: "敏感话题时点头显得认真"
+
+  - scene_id: "s7_multi_person"
+    intent: "turn_left"
+    reason: "多人场景转向引入其他人"
+
+  - scene_id: "s8_farewell"
+    intent: "wag_tail"
+    reason: "道别时摇尾巴有留恋感"
+
+# ================================================================
 # 距离触发规则（distance_delta < threshold 时触发）
+# ================================================================
 distance_rules:
   - threshold: -0.2
     intent: "step_back"
     reason: "目标接近过快，触发后退限幅"
 
+# ================================================================
 # 默认动作（所有规则均未命中时使用）
+# ================================================================
 default_intent: "wag_tail"
 default_reason: "默认友好反馈动作"

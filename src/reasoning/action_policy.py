@@ -43,6 +43,7 @@ class ActionPolicy:
         rules = self._load_rules(rules_path or _DEFAULT_RULES_PATH)
         self._keyword_rules: list[dict[str, Any]] = rules.get("keyword_rules", _BUILTIN_KEYWORD_RULES)
         self._emotion_rules: list[dict[str, Any]] = rules.get("emotion_rules", [])
+        self._scene_action_rules: list[dict[str, Any]] = rules.get("scene_action_rules", [])
         self._distance_rules: list[dict[str, Any]] = rules.get("distance_rules", [])
         self._default_intent: str = str(rules.get("default_intent", "wag_tail"))
         self._default_reason: str = str(rules.get("default_reason", "默认友好反馈动作"))
@@ -69,9 +70,12 @@ class ActionPolicy:
         active_person_id: str = "",
         emotion_trend: str = "neutral",
         distance_delta: float = 0.0,
+        scene_id: str = "",
     ) -> ActionDecision:
-        """按 YAML 规则顺序匹配并输出动作意图。"""
-        # 拼接三路文本用于关键词匹配
+        """按 YAML 规则顺序匹配并输出动作意图。
+
+        优先级：关键词 > 场景动作 > 情绪 > 距离 > 默认
+        """
         combined = f"{reply_text} {asr_text} {vision_summary}".lower()
 
         # 1. 关键词规则（顺序匹配，首个命中生效）
@@ -80,13 +84,19 @@ class ActionPolicy:
             if any(kw.lower() in combined for kw in keywords):
                 return ActionDecision(intent=rule["intent"], reason=rule["reason"])
 
-        # 2. 情绪规则
+        # 2. 场景动作映射（场景 ID 精确匹配）
+        if scene_id:
+            for rule in self._scene_action_rules:
+                if rule.get("scene_id", "") == scene_id:
+                    return ActionDecision(intent=rule["intent"], reason=rule["reason"])
+
+        # 3. 情绪规则（情绪字符串精确匹配）
         for rule in self._emotion_rules:
             if emotion_trend == rule.get("emotion", ""):
                 reason = str(rule.get("reason", "")).replace("目标", active_person_id or "目标")
                 return ActionDecision(intent=rule["intent"], reason=reason)
 
-        # 3. 距离规则
+        # 4. 距离规则
         for rule in self._distance_rules:
             threshold = float(rule.get("threshold", 0.0))
             if distance_delta < threshold:
